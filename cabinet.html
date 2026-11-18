@@ -331,9 +331,9 @@ function nextActivity(activity,today){const base=activity.occurredAt||activity.d
 // Google Sheets pilot transport. Credentials are sent only in a POST body.
 const endpointPattern=/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
 const tokenPattern=/^[a-f0-9]{64}\.[a-f0-9]{64}$/;
-const readOnlyMethods=new Set(['crmOpen','crmCardRead','crmManagerReport','crmManagerGuide','crmAssignmentPreview','crmSurveyRead','crmUsers','crmSession','crmWorkspace','crmWorkspaceFresh','crmRead']);
+const readOnlyMethods=new Set(['crmOpen','crmCardRead','crmManagerReport','crmManagerGuide','crmAssignmentPreview','crmAssignmentPreviewOnArea','crmSurveyRead','crmUsers','crmSession','crmWorkspace','crmWorkspaceFresh','crmRead']);
 const sessionLifetime=12*60*60*1000;
-const rpcArity=Object.freeze({crmEmailStart:2,crmEmailVerify:3,crmEnter:3,crmEnterCompact:4,crmEmailLogout:1,crmUsers:1,crmUserSave:4,crmOpen:1,crmCardRead:2,crmSaveCard:5,crmMoveCard:5,crmManagerGuide:1,crmManagerReport:2,crmAssignmentPreview:2,crmBulkAssign:4,crmSurveyRead:2,crmSurveySave:5,crmSession:1,crmWorkspace:1,crmWorkspaceFresh:1,crmRead:2,crmSaveRead:5,crmMoveRead:5,crmRecordRead:5,crmCreateLead:3,crmItemSave:5});
+const rpcArity=Object.freeze({crmEmailStart:2,crmEmailVerify:3,crmEnter:3,crmEnterCompact:4,crmEmailLogout:1,crmUsers:1,crmUserSave:4,crmOpen:1,crmCardRead:2,crmSaveCard:5,crmMoveCard:5,crmManagerGuide:1,crmManagerReport:2,crmAssignmentPreview:2,crmBulkAssign:4,crmAssignmentPreviewOnArea:3,crmBulkAssignOnArea:5,crmSurveyRead:2,crmSurveySave:5,crmSession:1,crmWorkspace:1,crmWorkspaceFresh:1,crmRead:2,crmSaveRead:5,crmMoveRead:5,crmRecordRead:5,crmCreateLead:3,crmItemSave:5});
 function endpointReady(value){return endpointPattern.test(value||'');}
 function createSheetsClient(backendUrl,{fetchImpl=fetch,onMeasure=()=>{},now=()=>performance.now()}={}){
   return async function call(method,...args){
@@ -496,7 +496,7 @@ function openModal(title,kind,record,html){if(isCardDirty()){toast('Сначал
 function closeModal(force=false){if(!force&&!discardChanges())return;$('editorDialog').close();$('dialogBody').replaceChildren();modal=null;}
 $('editorDialog').addEventListener('cancel',event=>{event.preventDefault();closeModal();});
 $('entityForm').addEventListener('input',event=>{if(modal?.kind==='sale'&&['quantity','unitPrice'].includes(event.target.name))$('saleTotal').textContent=money(saleAmount(Object.fromEntries(new FormData($('entityForm')))));});
-$('entityForm').addEventListener('change',event=>{if(modal?.kind==='bulk-assignment'&&event.target.name==='assignmentManager'){accessStatus('dialogStatus','');return loadBulkPreview(modal,event.target.value);}if(modal?.kind==='sale'&&event.target.name==='category'){const unit=$('entityForm').elements.unit,prior=modal.category==='service'?'услуга':'рулон';if(unit.value===prior)unit.value=event.target.value==='service'?'услуга':'рулон';modal.category=event.target.value;}});
+$('entityForm').addEventListener('change',event=>{if(modal?.kind==='bulk-assignment'&&['assignmentManager','assignmentArea'].includes(event.target.name)){accessStatus('dialogStatus','');return loadBulkPreview(modal);}if(modal?.kind==='sale'&&event.target.name==='category'){const unit=$('entityForm').elements.unit,prior=modal.category==='service'?'услуга':'рулон';if(unit.value===prior)unit.value=event.target.value==='service'?'услуга':'рулон';modal.category=event.target.value;}});
 $('entityForm').addEventListener('submit',async event=>{event.preventDefault();if(modal?.kind==='access')return submitAccess(event);if(modal?.kind==='bulk-assignment')return submitBulkAssignment();if(!modal||!canEdit()||saving||(modal.kind==='transfer'&&!canCoordinate()))return;const kind=modal.kind,original=modal.original,values=Object.fromEntries(new FormData(event.target));let record;if(kind==='lead')record={name:values.name,city:values.city,address:values.address,profile:values.profile,phones:values.phones,channels:values.channels,links:['',''],stage:values.stage,manager:values.manager,due:values.due,next:values.next,last:'',note:values.note,amount:values.amount,reason:values.reason};else if(kind==='activity')record={...(original?{id:original.id}:{}),leadId:values.leadId,kind:values.kind,title:values.title,status:values.status,due:values.due,occurredAt:values.occurredAt,manager:values.manager,note:values.note,result:values.result,equipment:values.equipment||'',quantity:Number(values.quantity||0),contract:values.contract||'',repeatDays:Number(values.repeatDays||0)};else if(kind==='transfer')record={...(original?{id:original.id}:{}),leadId:values.leadId,dealer:values.dealer,manager:values.manager,status:values.status,date:values.date,nextContact:values.nextContact,note:values.note};else if(kind==='sale')record={...(original?{id:original.id}:{}),leadId:values.leadId,date:values.date,item:values.item,category:values.category,quantity:Number(values.quantity),unit:values.unit,unitPrice:Number(values.unitPrice),seller:values.seller,warehouse:values.warehouse,source:values.source,status:values.status,note:values.note};else return;const view=viewId;setSaving(true);accessStatus('dialogStatus','Сохраняю…');try{const saved=kind==='lead'?await write('crmCreateLead',[record],'new-lead'):await write('crmItemSave',[kind,original,record],kind+':'+(original?.id||'new'));if(kind==='lead'){upsertById(db.leads,normalizePilotLead(saved));}else{upsertById(kind==='activity'?db.activities:kind==='sale'?db.sales:db.transfers,saved);if(current)current._historyStale=true;}closeModal(true);render();toast('Сохранено в Google Таблице · '+(lastWriteMilliseconds/1000).toLocaleString('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1})+' с');if(kind==='lead'&&saved?.id){closeCard(true);setSaving(false);await openCard(saved.id);}else if(current){renderDrawer();}}catch(error){if(error!==abandoned&&view===viewId)accessStatus('dialogStatus',errorText(error),true);}finally{if(view===viewId)setSaving(false);}});
 
 function openItem(kind,id){const pool=kind==='activity'?db.activities:kind==='sale'?db.sales:db.transfers,item=pool.find(x=>x.id===id);if(!item){toast('Запись не найдена. Обновите данные.',true);return;}if(kind==='activity')openActivity(item.kind,item.leadId,item);else if(kind==='sale')openSale(item.leadId,item);else openTransfer(item.leadId,item);}
@@ -1277,33 +1277,38 @@ function openBulkAssignment() {
   const choices = [['', 'Выберите менеджера'], ...managers.map(user => [user.email, user.name ? user.name+' · '+user.email : user.email])];
   const email = assignmentRetry?.email || '';
   if (email && !choices.some(([value]) => value === email)) choices.push([email, email]);
+  const areas = [["all", "Вся территория"], ["city", "Йошкар-Ола"], ["rest", "За пределами города"], ["unknown", "География требует уточнения"]];
+  const region = assignmentRetry?.area || (areas.some(([id]) => id === geoScope) ? geoScope : 'all');
   openModal('Массовое назначение', 'bulk-assignment', null,
-    '<p class="note">Назначение включает всю территорию и карточки с неуточнённой географией. Текущие ответственные будут заменены на выбранного менеджера.</p>'+
+    '<p class="note">Проверьте территорию и список смены ответственных.</p>'+
+    selectField('Территория','assignmentArea',areas,region,true,true)+
     selectField('Менеджер','assignmentManager',choices,email,true,true)+
     '<p id="assignmentPreview" class="note" role="status"></p>');
   if (modal?.kind !== 'bulk-assignment') return;
   const select = $('entityForm').elements.assignmentManager;
   select.disabled = managers.length === 0 || Boolean(assignmentRetry);
-  $('dialogSubmit').textContent = 'Назначить все карточки';
+  $('dialogSubmit').textContent = 'Назначить карточки территории';
   $('dialogSubmit').disabled = true;
   if (assignmentRetry) {
     modal.preview = assignmentRetry;
     showBulkPreview(assignmentRetry);
     showAssignmentRetry();
   } else {
-    void loadBulkPreview(modal, email);
+    void loadBulkPreview(modal);
   }
 }
 
 function showBulkPreview(preview) {
-  const size = `Карточек в базе ${count(preview.total)}, городских карточек ${count(preview.city)}.`;
+  const size = `Карточек в выбранной территории: ${count(preview.total)}.`;
   const changes = preview.email ? (preview.changed ?
     ` Сменят ответственного ${count(preview.changed)} карточек. Из них с действующим назначением ${count(preview.reassigned)}.` :
     ' Все карточки уже назначены выбранному менеджеру.') : '';
   $('assignmentPreview').textContent = size + changes;
 }
 
-async function loadBulkPreview(dialog, email) {
+async function loadBulkPreview(dialog) {
+  const selection = $('entityForm').elements;
+  const email = selection.assignmentManager.value, area = selection.assignmentArea.value;
   const request = {};
   dialog.previewRequest = request;
   dialog.preview = null;
@@ -1311,9 +1316,9 @@ async function loadBulkPreview(dialog, email) {
   $('assignmentPreview').textContent = 'Проверяю карточки…';
   const currentRequest = () => modal === dialog && dialog.previewRequest === request;
   try {
-    const preview = await crmCall('crmAssignmentPreview', email);
+    const preview = await crmCall('crmAssignmentPreviewOnArea', email, area);
     if (!currentRequest()) return;
-    if (preview?.email !== email || ![preview.total, preview.city, preview.changed, preview.reassigned].every(n => Number.isInteger(n) && n >= 0) ||
+    if (preview?.email !== email || preview?.area !== area || ![preview.total, preview.city, preview.changed, preview.reassigned].every(n => Number.isInteger(n) && n >= 0) ||
         preview.reassigned > preview.changed || preview.changed > preview.total || preview.city > preview.total ||
         (email && !/^[a-f0-9]{64}$/.test(preview.revision))) {
       throw new Error('Получен неполный расчёт. Откройте массовое назначение заново.');
@@ -1333,6 +1338,7 @@ async function loadBulkPreview(dialog, email) {
 
 function showAssignmentRetry() {
   $('entityForm').elements.assignmentManager.disabled = true;
+  $('entityForm').elements.assignmentArea.disabled = true;
   $('dialogSubmit').disabled = false;
   $('dialogSubmit').textContent = 'Повторить назначение';
   accessStatus('dialogStatus','Ответ сервера ещё не подтверждён. Повторите то же назначение.',true);
@@ -1347,8 +1353,8 @@ async function submitBulkAssignment() {
   setSaving(true);
   accessStatus('dialogStatus','Сохраняю назначения и журнал…');
   try {
-    const result = await write('crmBulkAssign', [preview.email, preview.revision], 'bulk-assignment', saved =>
-      saved?.email === preview.email && saved.revision === preview.revision && saved.changed === preview.changed);
+    const result = await write('crmBulkAssignOnArea', [preview.email, preview.area, preview.revision], 'bulk-assignment', saved =>
+      saved?.email === preview.email && saved.area === preview.area && saved.revision === preview.revision && saved.changed === preview.changed);
     if (view !== viewId) return;
     assignmentRetry = null;
     confirmed = true;
@@ -1363,8 +1369,8 @@ async function submitBulkAssignment() {
       setSaving(false);
       if (modal === dialog && assignmentRetry) showAssignmentRetry();
       else if (modal === dialog && !confirmed) {
-        $('dialogSubmit').textContent = 'Назначить все карточки';
-        void loadBulkPreview(dialog, preview.email);
+        $('dialogSubmit').textContent = 'Назначить карточки территории';
+        void loadBulkPreview(dialog);
       }
     }
   }
